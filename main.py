@@ -9,6 +9,8 @@ from datetime import datetime, date
 import math
 import paho.mqtt.client as mqtt_client
 import json
+import requests
+import xmltodict
 
 
 
@@ -371,6 +373,15 @@ class Model:
 def get_suntime(location, date):
     key = 'owsao31Eak4pE2i8SQkuu6bVXieWxILomFCxifqPQAW4wgbkVJ%2F9X0hIzljulAYMV6KcUZPLla2xAUusk4B1wg%3D%3D'
     call_string = 'http://apis.data.go.kr/B090041/openapi/service/RiseSetInfoService/getAreaRiseSetInfo?location='+ location +'&locdate=' + str(date) + '&ServiceKey=' + key
+    result = requests.get(call_string)
+    jsonresult = json.loads(json.dumps(xmltodict.parse(result.text)))
+    print(jsonresult)
+    sunrise = jsonresult['response']['body']['items']['item']['sunrise']
+    sunset = jsonresult['response']['body']['items']['item']['sunset']
+    return sunrise, sunset
+
+print(get_suntime('서울', 20220527))
+raise IOError
 
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -384,18 +395,21 @@ def on_disconnect(client, userdata, flags, rc=0):
 def on_subscribe(client, userdata, mid, granted_qos, model_living, model_1, model_2, model_3, area='서울', filedir='./log.csv'):
     print("subscribed: " + str(mid) + " // " + str(granted_qos))
     # 받은 메시지를 변수값으로 분해
-    r_time, s_time, datetime_date, datetime_time, E_o, Mo, S_plug, T_i = resolve_message(mid)
+    r_time, s_time, datetime_year, datetime_month, datetime_date, E_o, Mo, S_plug, T_i = resolve_message(mid)
     # 로그용 현재 시간을 구함
     current_time = datetime.datetime.now()
     # 받은 값들을 CSV로 저장
     write_csv = (filedir, [current_time, r_time, s_time, datetime_date, datetime_time, E_o, Mo, S_plug, T_i])
     # 일출/일몰시각을 기상청 API로 받아옴 (귀찮으니 매번 받아옴)
-    datetime_time_sunrise, datetime_time_sunset = get_suntime(area, str(datetime_date)+str(datetime_time))
+    datetime_time_sunrise, datetime_time_sunset = get_suntime(area, str(datetime_year)+str(datetime_month).zfill(2)+str(datetime_date).zfill(2))
     # 받아온 값으로 실별 모델예측을 수행
-    model_living.predict(E_o,datetime_date,datetime_time,datetime_time_sunrise,datetime_time_sunset,Mo,S_plug,T_i)
-    model_1.predict(E_o,datetime_date,datetime_time,datetime_time_sunrise,datetime_time_sunset,Mo,S_plug,T_i)
-    model_2.predict(E_o,datetime_date,datetime_time,datetime_time_sunrise,datetime_time_sunset,Mo,S_plug,T_i)
-    model_3.predict(E_o,datetime_date,datetime_time,datetime_time_sunrise,datetime_time_sunset,Mo,S_plug,T_i)
+    living_var = model_living.predict(E_o,datetime_date,datetime_time,datetime_time_sunrise,datetime_time_sunset,Mo,S_plug,T_i)
+    model_1_var = model_1.predict(E_o,datetime_date,datetime_time,datetime_time_sunrise,datetime_time_sunset,Mo,S_plug,T_i)
+    model_2_var = model_2.predict(E_o,datetime_date,datetime_time,datetime_time_sunrise,datetime_time_sunset,Mo,S_plug,T_i)
+    model_3_var = model_3.predict(E_o,datetime_date,datetime_time,datetime_time_sunrise,datetime_time_sunset,Mo,S_plug,T_i)
+    # json으로 포장
+    #json_wrap = (living_var, model_1_var, model_2_var, model_3_var)
+    client.publish(topic_name, json.dumps({"living": living_var, 'room1': model_1_var, 'room2': model_2_var, 'room3': model_3_var}), 1)
 
 def on_message(client, userdata, msg):
     print(str(msg.payload.decode("utf-8")))
